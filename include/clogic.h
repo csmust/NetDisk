@@ -32,6 +32,8 @@ private:
     TcpKernel* m_pKernel;
     CMysql * m_sql;
     Block_Epoll_Net * m_tcp;
+
+    MyMap<int , UserInfo*> m_mapIDToUserInfo;  //带锁的MyMap,存储登录的用户信息
 };
 
 #endif // CLOGIC_H
