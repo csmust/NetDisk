@@ -583,3 +583,57 @@ struct STRU_GET_SHARE_RS
     int result;
     char dir[_MAX_PATH_SIZE];
 };
+
+//下载文件夹头请求
+#define _DEF_PACK_FOLDER_HEADER_RQ          (_DEF_PACK_BASE + 24 )
+//文件夹的头请求结构体
+struct STRU_FOLDER_HEADER_RQ
+{
+    STRU_FOLDER_HEADER_RQ():type(_DEF_PACK_FOLDER_HEADER_RQ)
+        ,fileid(0),timestamp(0){
+        memset( fileName , 0, sizeof(fileName) );
+        memset( dir , 0, sizeof(dir) );
+    }
+    PackType type;
+
+    int fileid;
+    char fileName[_MAX_PATH_SIZE];
+    char dir[_MAX_PATH_SIZE];//路径
+    int timestamp;
+};
+
+////////////////删除文件///////////////////
+//删除文件请求
+#define _DEF_PACK_DELETE_FILE_RQ (_DEF_PACK_BASE + 25)
+//删除文件回复
+#define _DEF_PACK_DELETE_FILE_RS (_DEF_PACK_BASE + 26)
+
+//删除文件请求 ： 某人删除某路径下的某个文件 fileid数组
+struct STRU_DELETE_FILE_RQ
+{
+    void init()
+    {
+        type = _DEF_PACK_DELETE_FILE_RQ;
+        userid = 0;
+        fileCount = 0;
+
+    }
+    PackType type;
+    int userid;
+    char dir[_MAX_PATH_SIZE];
+    int fileCount;
+    int fileidArray[];
+};
+
+//删除文件回复
+struct STRU_DELETE_FILE_RS
+{
+    STRU_DELETE_FILE_RS():type(_DEF_PACK_DELETE_FILE_RS),result(1)
+    {
+        memset(dir,0,sizeof(dir));
+    }
+    PackType type;
+    int result;
+    char dir[_MAX_PATH_SIZE];
+};
+

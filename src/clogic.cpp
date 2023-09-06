@@ -9,13 +9,14 @@ void CLogic::setNetPackMap()
     NetPackMap(_DEF_PACK_FILE_CONTENT_RQ) = &CLogic::FileContentRq;
     NetPackMap(_DEF_PACK_GET_FILE_INFO_RQ) = &CLogic::GetFileInfoRq;
     NetPackMap(_DEF_PACK_DOWNLOAD_FILE_RQ) = &CLogic::DownloadFileRq;
-    NetPackMap(_DEF_PACK_DOWNLOAD_FOLDER_RQ) = &CLogic::DownloadFolderRq;
     NetPackMap(_DEF_PACK_FILE_HEADER_RS) = &CLogic::FileHeaderRs;
     NetPackMap(_DEF_PACK_FILE_CONTENT_RS) = &CLogic::FileContentRs;
     NetPackMap(_DEF_PACK_ADD_FOLDER_RQ) = &CLogic::AddFolderRq;
     NetPackMap(_DEF_PACK_SHARE_FILE_RQ) = &CLogic::ShareFileRq;
     NetPackMap(_DEF_PACK_MY_SHARE_RQ) = &CLogic::MyShareRq;
     NetPackMap(_DEF_PACK_GET_SHARE_RQ) = &CLogic::GetShareRq;
+    NetPackMap(_DEF_PACK_DOWNLOAD_FOLDER_RQ) = &CLogic::DownloadFolderRq;
+    NetPackMap(_DEF_PACK_DELETE_FILE_RQ) = &CLogic::DeleteFileRq;
 
 
 }
@@ -441,10 +442,107 @@ void CLogic::DownloadFolderRq(sock_fd clientfd, char *szbuf, int nlen)
 {
     _DEF_COUT_FUNC_
     //拆包
+    STRU_DOWNLOAD_FOLDER_RQ *rq = (STRU_DOWNLOAD_FOLDER_RQ*)szbuf;
+    //查数据库 拿到信息 
+    char sqlbuf[1000] = "";
+    sprintf(sqlbuf, "select f_type ,f_id,f_name,f_path,f_MD5,f_size,f_dir from user_file_info where u_id = %d and f_dir = '%s' and f_id= %d;",
+            rq->userid, rq->dir, rq->fileid);
+    list<string> lstRes;
+    bool res = m_sql->SelectMysql(sqlbuf, 7, lstRes);
+    if(!res){
+        cout<<"select fail : "<<sqlbuf<<endl;
+        return;
+    }
+    string type = lstRes.front(); lstRes.pop_front();
+    //此时必定是文件夹
+    //有个问题是需要避免所有文件用一个时间戳！！！--->解决 引用
+    int timestamp = rq->timestamp;
+    DownloadFolder(rq->userid, timestamp, clientfd, lstRes);
+}
+void CLogic::DownloadFolder(int userid,int& timestamp , sock_fd clientfd, list<string> &lstRes)
+{
+    //string type = lstRes.front(); lstRes.pop_front();
+    int fileid = stoi(lstRes.front());lstRes.pop_front();
+    string strName = lstRes.front(); lstRes.pop_front();
+    string strPath = lstRes.front(); lstRes.pop_front();
+    string strMD5 = lstRes.front(); lstRes.pop_front();
+    int size = stoi(lstRes.front()); lstRes.pop_front();
+    string dir = lstRes.front(); lstRes.pop_front();
 
+    //发送文件夹头请求
+    STRU_FOLDER_HEADER_RQ rq;
+    rq.timestamp = ++timestamp;
+    strcpy(rq.dir, dir.c_str());
+    rq.fileid = fileid;
+    strcpy(rq.fileName , strName.c_str());
+    SendData(clientfd, (char *)&rq, sizeof(rq));
+
+    //拼接路径
+    string newdir = dir + strName + "/";
+
+    //查询下载当前文件夹内的内容列表
+    char sqlbuf[1000] = "";
+    sprintf(sqlbuf, "select f_type , f_id , f_name ,f_path , f_MD5,f_size,f_dir from user_file_info where u_id = %d and f_dir = '%s' ;",
+            userid, newdir.c_str());
+    list<string> newlstRes;
+    bool res = m_sql->SelectMysql(sqlbuf, 7, newlstRes);
+    if(!res){
+        cout<<"select fail : "<<sqlbuf<<endl;
+        return;
+    }
+    if(newlstRes.size() == 0){
+        cout<<"select zero : "<<sqlbuf<<endl;
+        return;
+    }
+    while(newlstRes.size() > 0){
+        string type = newlstRes.front(); newlstRes.pop_front();
+        if(type == "file"){
+            DownloadFile(userid,timestamp,clientfd,newlstRes);
+        }else{
+            DownloadFolder(userid,timestamp,clientfd,newlstRes);
+        }
+    }
+    
 
 }
-
+void CLogic::DownloadFile(int userid,int& timestamp , sock_fd clientfd, list<string> &lstRes)
+{
+    //取出数据库查到的信息
+    int fileid = stoi(lstRes.front());lstRes.pop_front();
+    string strName = lstRes.front(); lstRes.pop_front();
+    string strPath = lstRes.front(); lstRes.pop_front();
+    string strMD5 = lstRes.front(); lstRes.pop_front();
+    int size = stoi(lstRes.front()); lstRes.pop_front();
+    string dir = lstRes.front(); lstRes.pop_front();
+    //赋值给文件信息结构体
+    FileInfo *info = new FileInfo;
+    info->absolutePath = strPath;
+    info->dir = dir;
+    info->fid = fileid;
+    info->md5 = strMD5;
+    info->name = strName;
+    info->size = size;
+    info->type = "file";
+    info->fileFd = open(info->absolutePath.c_str() , O_RDONLY);
+    if(info->fileFd <=0){
+        cout << "file open fail" << endl;
+        return;
+    }
+    //key求出来
+    int64_t user_time = userid * getNumber() + (++timestamp);
+    //存到map里面
+    m_mapTimestampToFileInfo.insert (user_time , info);
+    //发送文件头请求
+    STRU_FILE_HEADER_RQ headrq;
+    strcpy(headrq.dir, dir.c_str());
+    headrq.fileid = fileid;
+    strcpy( headrq.fileName , info->name.c_str());
+    strcpy(headrq.md5, info->md5.c_str());
+    strcpy(headrq.fileType, "file");
+    headrq.size = info->size;
+    headrq.timestamp = timestamp;
+    SendData(clientfd , (char*)&headrq , sizeof(headrq));
+}
 
 //处理客户端的下载文件文件头回复（客户端告知服务端已经创建，等待服务端传输内容，服务端开始传输）
 void CLogic::FileHeaderRs(sock_fd clientfd, char *szbuf, int nlen)
@@ -713,6 +811,120 @@ void CLogic::GetShareRq(sock_fd clientfd, char *szbuf, int nlen)
     strcpy(rs.dir , rq->dir);
     //发送
     SendData(clientfd,(char*)&rs , sizeof(rs));
+}
+
+void CLogic::DeleteFileRq(sock_fd clientfd, char *szbuf, int nlen)
+{
+    _DEF_COUT_FUNC_
+    //拆包
+    STRU_DELETE_FILE_RQ * rq = (STRU_DELETE_FILE_RQ*)szbuf;
+    //id列表
+    for (int i = 0; i < rq->fileCount;++i){
+        int fileid = rq->fileidArray[i];
+        //删除每一项
+        DeleteOneItem(rq->userid, fileid, rq->dir);
+    }
+    
+    //写回复
+    STRU_DELETE_FILE_RS rs;
+    rs.result = 1;
+    strcpy(rs.dir , rq->dir);
+    SendData(clientfd , (char*)&rs , sizeof(rs));
+}
+void CLogic::DeleteOneItem(int userid , int fileid ,string dir)
+{
+    //删除文件需要 u_id f_dir f_id
+    
+    //需要知道是什么类型 type name（文件夹需要name）   path
+    char sqlbuf[1000] = "";
+    sprintf(sqlbuf, "select f_type ,f_name ,f_path from user_file_info where u_id = %d and f_id=%d and f_dir ='%s';"
+        ,userid, fileid,dir.c_str());
+    list<string> lst;
+    bool res = m_sql->SelectMysql(sqlbuf, 3, lst);
+    if(!res){
+        cout<<"selectMysql fail:"<<sqlbuf<<endl;
+        return;
+    }
+    if(lst.size()==0){
+        cout<<"select zero:"<<sqlbuf<<endl;
+        return;
+    }
+    string type = lst.front(); lst.pop_front();
+    string name = lst.front(); lst.pop_front();
+    string path = lst.front(); lst.pop_front();
+    if(type == "file"){
+        DeleteFile(userid, fileid, dir, path);
+    }
+    else{
+        DeleteFolder(userid, fileid, dir, name);
+    }
+
+}
+void CLogic::DeleteFile(int userid ,int fileid , string dir , string path)
+{
+    //删除用户文件对应的关系
+    char sqlbuf[1000] = "";
+    sprintf(sqlbuf, "delete from t_user_file where u_id = %d and f_dir = '%s' and f_id = %d;", userid, dir.c_str(), fileid);
+    bool res = m_sql->UpdataMysql(sqlbuf); 
+    if(!res){
+        cout << "delete  fail : " << sqlbuf << endl;
+        return;
+    }
+    //再次查询id看能不能找到数据库记录，如果不能，删除本地文件
+    sprintf(sqlbuf,"select f_id from t_file where f_id = %d;",fileid);
+    list<string> lst;
+    res = m_sql->SelectMysql(sqlbuf, 1, lst);
+    if(!res){
+        cout<<"selectMysql fail:"<<sqlbuf<<endl;
+        return;
+    }
+    if(lst.size()==0){
+        unlink(path.c_str());  //linux 文件io 删除文件
+    }
+}
+void CLogic::DeleteFolder(int userid ,int fileid , string dir ,string name)
+{
+    //删除用户文件对应的关系 u_id f_dir f_id
+    char sqlbuf[1000] = "";
+    sprintf(sqlbuf, "delete from t_user_file where u_id = %d and f_dir = '%s' and f_id = %d;", userid, dir.c_str(), fileid);
+    bool res = m_sql->UpdataMysql(sqlbuf); 
+    if(!res){
+        cout << "delete  fail : " << sqlbuf << endl;
+        return;
+    }
+
+    //拼接新路径
+    std::string newdir = dir + name + "/";
+    //查表 根据新路径查表 得到列表 f_id f_type path
+
+    sprintf(sqlbuf, "select f_type ,f_id, f_name ,f_path from user_file_info where u_id = %d  and f_dir ='%s';", userid,newdir.c_str());
+    list<string> lst;
+    res = m_sql->SelectMysql(sqlbuf, 4, lst);
+    if(!res){
+        cout<<"selectMysql fail:"<<sqlbuf<<endl;
+        return;
+    }
+    if(lst.size()==0){
+        cout<<"select zero:"<<sqlbuf<<endl;
+        return;
+    }
+        //循环
+    while(lst.size()!=0){
+        //取出信息
+        string type = lst.front(); lst.pop_front();
+        int fileid = stoi(lst.front()); lst.pop_front();
+        string name =lst.front(); lst.pop_front();
+        string path =lst.front(); lst.pop_front();
+
+        // 如果是文件
+        if(type=="file"){
+            DeleteFile(userid, fileid, newdir, path);
+        }
+        // 如果是文件夹
+        else{
+            DeleteFolder(userid, fileid, newdir, name);
+        }
+    }
 }
 
 void CLogic::GetShareByFile(int userid,int fileid,string dir,string name ,string time){
