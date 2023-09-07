@@ -17,8 +17,8 @@ void CLogic::setNetPackMap()
     NetPackMap(_DEF_PACK_GET_SHARE_RQ) = &CLogic::GetShareRq;
     NetPackMap(_DEF_PACK_DOWNLOAD_FOLDER_RQ) = &CLogic::DownloadFolderRq;
     NetPackMap(_DEF_PACK_DELETE_FILE_RQ) = &CLogic::DeleteFileRq;
-
-
+    NetPackMap(_DEF_PACK_CONTINUE_DOWNLOAD_RQ) = &CLogic::ContinueDownloadRq;
+    NetPackMap(_DEF_PACK_CONTINUE_UPLOAD_RQ) = &CLogic::ContinueUploadRq;
 }
 
 #define _DEF_COUT_FUNC_ cout << "clientfd:" << clientfd << " " << __func__ << endl;
@@ -542,6 +542,120 @@ void CLogic::DownloadFile(int userid,int& timestamp , sock_fd clientfd, list<str
     headrq.size = info->size;
     headrq.timestamp = timestamp;
     SendData(clientfd , (char*)&headrq , sizeof(headrq));
+}
+
+//
+void CLogic::ContinueDownloadRq(sock_fd clientfd, char *szbuf, int nlen)
+{
+    _DEF_COUT_FUNC_
+    //拆包
+    STRU_CONTINUE_DOWNLOAD_RQ *rq = (STRU_CONTINUE_DOWNLOAD_RQ*)szbuf;
+    //看map是否存在文件信息
+    int64_t user_time = rq->userid * getNumber() + rq->timestamp;
+    FileInfo *info = nullptr;
+   
+    if (!m_mapTimestampToFileInfo.find(user_time, info)){
+            // 没有创建文件信息 
+        info = new FileInfo;
+        // --由查表获取文件信息 添加到Map
+        //查数据库 查什么 为什么 f_name , f_path ,f_MD5 ,f_size 通过 userid dir fileid 可以确定
+        char sqlbuf[1000] = "";
+        sprintf(sqlbuf,"select f_name , f_path ,f_MD5 ,f_size from user_file_info where u_id = %d and f_dir = '%s' and f_id= %d;" , 
+        rq->userid , rq->dir ,rq->fileid);
+        list<string> lstRes;
+        bool res = m_sql->SelectMysql(sqlbuf , 4 , lstRes);
+        if(!res){
+            std::cout << "select fail :" << sqlbuf << std::endl;
+            return;
+        }
+        //如果没有返回
+        if(lstRes.size() == 0){
+            std::cout << "select zero :" << sqlbuf << std::endl;
+            return;
+        }
+        //有 先取出 再写文件信息
+        string strName = lstRes.front(); lstRes.pop_front();  //客户端看见的文件名vxxxxxr.jpg
+        string strPath = lstRes.front(); lstRes.pop_front();  //服务器中文件的真实路径 /home/zhou/project/NetDisk/2/9372ef2fe33b0aa4dac6fbeb11bb16a8
+        string strMD5 = lstRes.front(); lstRes.pop_front();   //9372ef2fe33b0aa4dac6fbeb11bb16a8 唯一标识文件名
+        int size = stoi(lstRes.front()); lstRes.pop_front();
+
+        FileInfo *info = new FileInfo;
+        info->absolutePath = strPath;
+        info->dir = rq->dir;
+        info->fid = rq->fileid;
+        info->md5 = strMD5;
+        info->name = strName;
+        info->size = size;
+        info->type = "file";
+        info->fileFd = open(info->absolutePath.c_str() , O_RDONLY);
+        if(info->fileFd <= 0){
+            std::cout << "open continue file fail :" << info->absolutePath << std::endl;
+            return;
+        }
+        m_mapTimestampToFileInfo.insert(user_time, info);
+    }
+    //有map中有文件信息了
+    // 文件指针跳转  pos位置  同步Pos
+    lseek(info->fileFd,rq->pos,SEEK_SET);//SET是起始位置
+    info->pos = rq->pos;
+    // 读文件块  发送文件块
+    STRU_FILE_CONTENT_RQ contentRq;
+    contentRq.fileid = rq->fileid;
+    contentRq.timestamp = rq->timestamp;
+    contentRq.userid = rq->userid;
+    contentRq.len = read( info->fileFd , contentRq.content, _DEF_BUFFER);
+    SendData(clientfd,(char*)&contentRq,sizeof(contentRq));
+}
+
+void CLogic::ContinueUploadRq(sock_fd clientfd, char *szbuf, int nlen)
+{
+    _DEF_COUT_FUNC_
+    //拆包
+    STRU_CONTINUE_UPLOAD_RQ *rq = (STRU_CONTINUE_UPLOAD_RQ *)szbuf;
+    int64_t user_time = rq->userid * getNumber() + rq->timestamp;
+    // 需要查看Map中是否存在 user_time
+    FileInfo *info = nullptr;
+    if(!m_mapTimestampToFileInfo.find(user_time , info)){
+        // 不存在 创建
+        //不需要查表的
+        info = new FileInfo;
+        info->dir = rq->dir;
+        info->fid = rq->fileid;
+        info->type = "file";
+        //查表 获取信息 
+        char sqlbuf[1000] = "";
+        sprintf(sqlbuf, "select f_name , f_path  ,f_size ,f_MD5 from user_file_info where u_id = %d and f_id= %d and f_dir = '%s' and f_state = 0;" , rq->userid, rq->fileid, rq->dir);
+        list<string> lst;
+        bool res = m_sql->SelectMysql(sqlbuf, 4, lst);
+        if(!res){
+            cout << "select fail:" << sqlbuf << endl;
+            return;
+        }
+        if(lst.size()==0)
+            return;
+        //给 info赋值 然后打开文件
+        info->name = lst.front();           lst.pop_front();
+        info->absolutePath = lst.front();   lst.pop_front();
+        info->size = stoi(lst.front());     lst.pop_front();
+        info->md5 = lst.front();            lst.pop_front();
+        // info->fileFd = open(info->absolutePath.c_str(), O_WRONLY|O_APPEND);
+        info->fileFd = open(info->absolutePath.c_str(), O_WRONLY);  //O_WRONLY不会清空
+        if(info->fileFd <=0){
+            cout << "file open fail:" << errno << endl;
+            return;
+        }
+        m_mapTimestampToFileInfo.insert(user_time , info);
+    }
+    //现在已经有这个信息了  lseek 跳转并读取文件当前写的位置（就是文件末尾） 更新 Pos
+    info->pos = lseek(info->fileFd, 0, SEEK_END);
+    // 写回复 返回
+    STRU_CONTINUE_UPLOAD_RS rs;
+    rs.fileid = rq->fileid;
+    rs.timestamp = rq->timestamp;
+    rs.pos = info->pos;
+
+    SendData(clientfd , (char*)&rs , sizeof(rs));
+    
 }
 
 //处理客户端的下载文件文件头回复（客户端告知服务端已经创建，等待服务端传输内容，服务端开始传输）

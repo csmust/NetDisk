@@ -637,3 +637,74 @@ struct STRU_DELETE_FILE_RS
     char dir[_MAX_PATH_SIZE];
 };
 
+
+
+/////////////////下载续传协议 //////////////
+//请求
+#define _DEF_PACK_CONTINUE_DOWNLOAD_RQ     (_DEF_PACK_BASE + 27)
+// 告诉服务器 从哪里开始传数据块 就可以直接传了  不需要等待收到回复
+
+// 服务器中 map 有和没有  有 timestamp  没有 需要唯一确认文件 uid fid fdir
+struct STRU_CONTINUE_DOWNLOAD_RQ
+{
+    STRU_CONTINUE_DOWNLOAD_RQ():type(_DEF_PACK_CONTINUE_DOWNLOAD_RQ){
+        userid = 0;
+        timestamp = 0;
+        fileid = 0;
+        pos = 0;
+        memset( dir , 0 , sizeof(dir));
+    }
+    
+    PackType type;
+    int userid;
+    int timestamp;
+    int fileid;
+    int pos;
+    char dir[_MAX_PATH_SIZE];
+};
+/// 上传续传协议 /////////////
+/// 会询问服务器 已经上传到哪里了  所以要有回复 服务器把已经到哪里了 传给客户端
+/// 服务器 map 有 userid + timestamp 没有 查表 与下载续传查表 流程一样.
+//请求
+#define _DEF_PACK_CONTINUE_UPLOAD_RQ     (_DEF_PACK_BASE + 28)
+//回复  客户端在回复处理时 , 发文件块
+#define _DEF_PACK_CONTINUE_UPLOAD_RS     (_DEF_PACK_BASE + 29)
+
+struct STRU_CONTINUE_UPLOAD_RQ
+{
+    STRU_CONTINUE_UPLOAD_RQ():type(_DEF_PACK_CONTINUE_UPLOAD_RQ){
+        userid = 0;
+        timestamp = 0;
+        fileid = 0;
+        memset( dir , 0 , sizeof(dir));
+    }
+    
+    PackType type;
+    int userid;
+    int timestamp;
+    int fileid;
+    char dir[_MAX_PATH_SIZE];
+};
+
+struct STRU_CONTINUE_UPLOAD_RS
+{
+    STRU_CONTINUE_UPLOAD_RS():type(_DEF_PACK_CONTINUE_UPLOAD_RS){
+        fileid = 0;
+        timestamp = 0;
+        pos = 0;
+        //memset( dir , 0 , sizeof(dir));
+    }
+    
+    PackType type;
+    int fileid;
+    int timestamp;
+    int pos;
+    //char dir[_MAX_PATH_SIZE];  
+};
+
+
+
+//TODO
+//struct STRU_CONTINUE_UPLOAD_GETPOS_RQ{
+//
+//}

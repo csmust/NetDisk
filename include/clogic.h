@@ -53,6 +53,8 @@ public:
     void GetShareRq(sock_fd clientfd, char *szbuf, int nlen);
     //处理客户端发来的删除文件请求
     void DeleteFileRq(sock_fd clientfd, char *szbuf, int nlen);
+    void ContinueDownloadRq(sock_fd clientfd, char *szbuf, int nlen);
+    void ContinueUploadRq(sock_fd clientfd, char *szbuf, int nlen);
 
     void DeleteOneItem(int userid, int fileid, string dir);
 
@@ -66,6 +68,7 @@ public:
 
     void DownloadFolder(int userid,int& timestamp , sock_fd clientfd, list<string> &lstRes);
     void DownloadFile(int userid,int& timestamp , sock_fd clientfd, list<string> &lstRes);
+ 
 
     /*******************************************/
 
